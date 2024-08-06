@@ -6,6 +6,7 @@ from dotenv import load_dotenv
 import json
 import uuid
 import random
+import requests
 
 app = Flask(__name__)
 
@@ -28,8 +29,18 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 # Set up Google Text-to-Speech
 tts_client = texttospeech.TextToSpeechClient()
 
-def generate_story(prompt, system_message):
-    unique_context = f"This is a story about {random.choice(['a brave knight', 'a curious child', 'an adventurous explorer'])}."
+# List of generic fantasy protagonists
+protagonists = [
+    'a brave knight', 'a curious child', 'an adventurous explorer', 'a wise old wizard',
+    'a clever rogue', 'a noble prince', 'a fierce warrior', 'a kind healer',
+    'a magical fairy', 'a fearless ranger', 'a clever inventor', 'a powerful sorcerer',
+    'a loyal squire', 'a daring pirate', 'a mysterious stranger', 'a legendary hero',
+    'a valiant paladin', 'a gifted bard', 'a resourceful hunter', 'a watchful guardian'
+]
+
+
+def generate_story(prompt, system_message, protagonist):
+    unique_context = f"This is a story about {protagonist}."
     full_prompt = f"{prompt} {unique_context}"
     
     response = client.chat.completions.create(
@@ -42,6 +53,18 @@ def generate_story(prompt, system_message):
     )
     content = response.choices[0].message.content
     return add_ssml_anchors(content)
+
+def summarize_story(story):
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": "You are a summarizer."},
+            {"role": "user", "content": f"Summarize the following story in a concise manner:\n\n{story}"}
+        ],
+        max_tokens=100
+    )
+    summary = response.choices[0].message.content
+    return summary
 
 def translate_story(story):
     response = client.chat.completions.create(
@@ -82,8 +105,24 @@ def synthesize_speech(ssml_text, language_code, name, gender):
 
 def upload_to_gcs(content, file_path):
     blob = bucket.blob(file_path)
-    blob.upload_from_string(content, content_type='audio/mpeg')
+    blob.upload_from_string(content, content_type='audio/mpeg' if file_path.endswith('.mp3') else 'image/png')
     return blob.public_url
+
+def extract_key_points(story, num_points=3):
+    sentences = story.split('. ')
+    if len(sentences) < num_points:
+        return sentences
+    step = len(sentences) // num_points
+    return [sentences[i*step] for i in range(num_points)]
+
+def generate_image(prompt, char_profile):
+    response = client.images.generate(
+        model="dall-e-3",
+        prompt=f"{prompt} Character profile: {char_profile}",
+        n=1,
+        size="1024x1024"
+    )
+    return response.data[0].url
 
 @app.route('/')
 def home():
@@ -100,14 +139,43 @@ def generate_and_store_story():
     if not prompt or not title or not genre:
         return jsonify({"error": "Prompt, title, and genre are required"}), 400
 
+    # Pick a random protagonist from the list
+    protagonist = random.choice(protagonists)
+    char_profile = f"Main character: {protagonist}"
+
     # Generate a unique ID for the story
     story_id = str(uuid.uuid4())
 
     # Generate English story content
-    content_en = generate_story(prompt, "You are a storyteller.")
+    content_en = generate_story(prompt, "You are a storyteller.", protagonist)
     
     # Translate English story content to Turkish
     content_tr = translate_story(content_en)
+
+    # Summarize the story
+    summary = summarize_story(content_en)
+
+    # Extract key points
+    key_points = extract_key_points(summary)
+
+    # Generate images for each key point
+    image_urls = []
+    for point in key_points:
+        image_url = generate_image(point, char_profile)
+        image_urls.append(image_url)
+
+    # Store images in Cloud Storage
+    image_paths = []
+    for i, url in enumerate(image_urls):
+        response = requests.get(url)
+        file_path = f'stories/{genre}/{story_id}/images/image_{i+1}.png'
+        blob = bucket.blob(file_path)
+        blob.upload_from_string(response.content, content_type='image/png')
+        image_paths.append(blob.public_url)
+
+    # Add anchors to the story text
+    content_en_with_anchors = insert_image_tags(content_en, image_paths)
+    content_tr_with_anchors = insert_image_tags(content_tr, image_paths)
 
     # Define TTS voices with corrected gender for Turkish voices and more distinct old voices
     voices = [
@@ -125,7 +193,7 @@ def generate_and_store_story():
     tts_urls = {}
     for voice in voices:
         language_code = voice['name'][:5]  # Extract language code from name
-        content = content_en if "en-" in voice['name'] else content_tr
+        content = content_en_with_anchors if "en-" in voice['name'] else content_tr_with_anchors
         tts_audio = synthesize_speech(content, language_code, voice['name'], voice['gender'])
         directory = "en" if "en-" in voice['name'] else "tr"
         file_path = f'stories/{genre}/{story_id}/{directory}/{voice["age"]}.mp3'
@@ -134,11 +202,12 @@ def generate_and_store_story():
     # Store story content and TTS URLs in Cloud Storage
     story_data = {
         'title': title,
-        'content_en': content_en,
-        'content_tr': content_tr,
+        'content_en': content_en_with_anchors,
+        'content_tr': content_tr_with_anchors,
         'tags': tags,
         'genre': genre,
-        'tts_urls': tts_urls
+        'tts_urls': tts_urls,
+        'image_urls': image_paths
     }
     story_blob = bucket.blob(f'stories/{genre}/{story_id}/story_data.json')
     story_blob.upload_from_string(json.dumps(story_data), content_type='application/json')
@@ -146,12 +215,20 @@ def generate_and_store_story():
     return jsonify({
         "story_id": story_id,
         "title": title,
-        "content_en": content_en,
-        "content_tr": content_tr,
+        "content_en": content_en_with_anchors,
+        "content_tr": content_tr_with_anchors,
         "tags": tags,
         "genre": genre,
-        "tts_urls": tts_urls
+        "tts_urls": tts_urls,
+        "image_urls": image_paths
     }), 201
+
+def insert_image_tags(content, image_paths):
+    paragraphs = content.split('</p>')
+    for i, image_url in enumerate(image_paths):
+        if i < len(paragraphs):
+            paragraphs[i] += f' <img src="{image_url}" alt="story_image_{i+1}" />'
+    return '</p>'.join(paragraphs)
 
 if __name__ == '__main__':
     app.run(debug=True)
