@@ -38,6 +38,53 @@ protagonists = [
     'a valiant paladin', 'a gifted bard', 'a resourceful hunter', 'a watchful guardian'
 ]
 
+sci_fi_protagonists = [
+    'a brave star pilot', 'a curious space cadet', 'an adventurous astronaut', 'a wise alien sage',
+    'a clever robot engineer', 'a noble space prince', 'a fierce galactic warrior', 'a kind star healer',
+    'a magical space fairy', 'a fearless explorer', 'a clever AI inventor', 'a powerful cosmic sorcerer',
+    'a loyal android companion', 'a daring space pirate', 'a mysterious alien visitor', 'a legendary star hero',
+    'a valiant space guardian', 'a gifted cosmic musician', 'a resourceful starship captain', 'a watchful cosmic protector'
+]
+
+
+fantasy_land_names = [
+    "Aeloria", "Valoria", "Nymaria", "Thaloria", "Zephyria",
+    "Lunaris", "Drakoria", "Mystara", "Sylphia", "Eryndor",
+    "Thalindor", "Aurelia", "Celandor", "Valkyra", "Frostveil",
+    "Eldrath", "Shadowmere", "Arvandor", "Brighthaven", "Cyranor",
+    "Mythralis", "Evernight", "Ravenwood", "Starfall", "Windrider",
+    "Silverleaf", "Stormwatch", "Briarwood", "Darkspire", "Moonveil",
+    "Sunhaven", "Highpeak", "Ironhold", "Goldhaven", "Feywild",
+    "Emberfall", "Shadowfen", "Whisperwind", "Crystalholm", "Ravenshire",
+    "Brightmoon", "Glimmerdeep", "Mistveil", "Twilightmere", "Windscar",
+    "Frostfang", "Darkwater", "Ashenvale", "Sunspire", "Winterhold",
+    "Stormkeep", "Duskwood", "Brightspire", "Dragonfell", "Hallowmere",
+    "Stonehaven", "Whispering Hollow", "Grimshade", "Brightvale", "Hollowpeak",
+    "Moonshadow", "Stormveil", "Starfire", "Wildwood", "Frostmourne",
+    "Glimmerwood", "Ashfall", "Thornwild", "Wyrmwood", "Silvermere",
+    "Dawnhaven", "Nightfall", "Brightwood", "Frostholm", "Ironwood"
+]
+
+sci_fi_location_names = [
+    "Nova Prime", "Starlight Station", "Lunar Falls", "Nebula Bay", "Galaxia",
+    "Orion's Edge", "Astroport", "Quantum Fields", "Stellar Harbor", "Cosmic Cove",
+    "Eclipse Ridge", "Meteor Valley", "Celestial Gardens", "Solaris", "Comet's Cradle",
+    "Pulsar City", "Nebulon", "Photon Plains", "Cosmos Reach", "Starbeam Junction",
+    "Andromeda Outpost", "Galactic Glade", "Astral Heights", "Sirius Ridge", "Vortex Plaza",
+    "Meteor Shores", "Skyward Station", "Nebula Heights", "Supernova Plains", "Starlight Springs",
+    "Cosmos Haven", "Asteroid Fields", "Quantum Cove", "Nebula Nexus", "Starglow Gardens",
+    "Lunar Horizon", "Eclipse Bay", "Celestial Heights", "Nova City", "Astroglow Plains",
+    "Galactic Ridge", "Solaris Bay", "Astroland", "Pulsar Peaks", "Comet's Gate",
+    "Quantum Quay", "Nebulon Vista", "Starlight Grove", "Meteor Crater", "Astral Bay",
+    "Cosmic Junction", "Orion's Landing", "Celestia", "Starlight Plains", "Solarwind Shores",
+    "Nebula Heights", "Meteor Harbor", "Skybeam Ridge", "Astro Heights", "Supernova Shores",
+    "Galaxia Gardens", "Starglow City", "Cosmos Cradle", "Eclipse Cove", "Lunar Shores",
+    "Quantum Peaks", "Nebula Quay", "Starfall Ridge", "Photon Bay", "Stellar Springs",
+    "Orion's Harbor", "Cosmic Heights", "Asteroid Shores", "Galactic Nexus", "Pulsar Haven"
+]
+
+
+
 
 def generate_story(prompt, system_message, protagonist):
     unique_context = f"This is a story about {protagonist}."
@@ -49,7 +96,9 @@ def generate_story(prompt, system_message, protagonist):
             {"role": "system", "content": system_message},
             {"role": "user", "content": full_prompt}
         ],
-        max_tokens=500
+        max_tokens=2500,
+        temperature=0.7,
+        stop=None
     )
     content = response.choices[0].message.content
     return add_ssml_anchors(content)
@@ -73,7 +122,7 @@ def translate_story(story):
             {"role": "system", "content": "You are a translator."},
             {"role": "user", "content": f"Translate the following story to Turkish. When you encounter names, translate them phonetically so they are pronounceable in Turkish. For example, 'Sir Alaric' should become 'Sör Alarik':\n\n{story}"}
         ],
-        max_tokens=500
+        max_tokens=2500
     )
     translated_content = response.choices[0].message.content
     return add_ssml_anchors(translated_content)
@@ -87,21 +136,50 @@ def add_ssml_anchors(text):
     ssml += "</speak>"
     return ssml.replace(".", ".<break time='700ms'/>")
 
+def chunk_text_to_ssml(text, max_size=5000):
+    """Splits text into SSML-valid chunks of specified byte size."""
+    current_chunk = []
+    current_size = len('<speak>') + len('</speak>')  # Account for <speak> and </speak> tags
+    
+    for paragraph in text.split('<p>'):
+        paragraph = paragraph.strip()
+        paragraph_ssml = f"<p>{paragraph}</p>"
+        paragraph_bytes = len(paragraph_ssml.encode('utf-8'))
+        
+        if current_size + paragraph_bytes > max_size:
+            yield f"<speak>{''.join(current_chunk)}</speak>"
+            current_chunk = []
+            current_size = len('<speak>') + len('</speak>')
+        
+        current_chunk.append(paragraph_ssml)
+        current_size += paragraph_bytes
+    
+    if current_chunk:
+        yield f"<speak>{''.join(current_chunk)}</speak>"
+
+
 def synthesize_speech(ssml_text, language_code, name, gender):
-    synthesis_input = texttospeech.SynthesisInput(ssml=ssml_text)
-    voice = texttospeech.VoiceSelectionParams(
-        language_code=language_code,
-        name=name,
-        ssml_gender=gender
-    )
-    audio_config = texttospeech.AudioConfig(
-        audio_encoding=texttospeech.AudioEncoding.MP3,
-        speaking_rate=0.9  # Adjust speaking rate to slow down the speech
-    )
-    response = tts_client.synthesize_speech(
-        input=synthesis_input, voice=voice, audio_config=audio_config
-    )
-    return response.audio_content
+    chunks = chunk_text_to_ssml(ssml_text, max_size=5000)
+    audio_contents = []
+    
+    for chunk in chunks:
+        synthesis_input = texttospeech.SynthesisInput(ssml=chunk)
+        voice = texttospeech.VoiceSelectionParams(
+            language_code=language_code,
+            name=name,
+            ssml_gender=gender
+        )
+        audio_config = texttospeech.AudioConfig(
+            audio_encoding=texttospeech.AudioEncoding.MP3,
+            speaking_rate=0.9  # Adjust speaking rate to slow down the speech
+        )
+        response = tts_client.synthesize_speech(
+            input=synthesis_input, voice=voice, audio_config=audio_config
+        )
+        audio_contents.append(response.audio_content)
+    
+    return b"".join(audio_contents)  # Concatenate all audio parts into a single byte stream
+
 
 def upload_to_gcs(content, file_path):
     blob = bucket.blob(file_path)
@@ -118,7 +196,7 @@ def extract_key_points(story, num_points=3):
 def generate_image(prompt, char_profile):
     response = client.images.generate(
         model="dall-e-3",
-        prompt=f"{prompt} Character profile: {char_profile}",
+        prompt=f"{prompt} Character profile: {char_profile}. The image should not contain any text, writing, or captions.",
         n=1,
         size="1024x1024"
     )
@@ -180,7 +258,7 @@ def generate_and_store_story():
     # Define TTS voices with corrected gender for Turkish voices and more distinct old voices
     voices = [
         {"name": "en-US-Wavenet-D", "gender": texttospeech.SsmlVoiceGender.MALE, "age": "young_man"},
-        {"name": "en-GB-Neural2-A", "gender": texttospeech.SsmlVoiceGender.FEMALE, "age": "young_woman"},
+        {"name": "en-GB-Wavenet-A", "gender": texttospeech.SsmlVoiceGender.FEMALE, "age": "young_woman"},
         {"name": "en-GB-Wavenet-D", "gender": texttospeech.SsmlVoiceGender.MALE, "age": "old_man"},
         {"name": "en-US-Wavenet-C", "gender": texttospeech.SsmlVoiceGender.FEMALE, "age": "old_woman"},
         {"name": "tr-TR-Wavenet-B", "gender": texttospeech.SsmlVoiceGender.MALE, "age": "young_man"},  # Corrected
