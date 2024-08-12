@@ -30,7 +30,7 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 tts_client = texttospeech.TextToSpeechClient()
 
 # List of generic fantasy protagonists
-protagonists = [
+fantasy_protagonists = [
     'a brave knight', 'a curious child', 'an adventurous explorer', 'a wise old wizard',
     'a clever rogue', 'a noble prince', 'a fierce warrior', 'a kind healer',
     'a magical fairy', 'a fearless ranger', 'a clever inventor', 'a powerful sorcerer',
@@ -82,10 +82,6 @@ sci_fi_location_names = [
     "Quantum Peaks", "Nebula Quay", "Starfall Ridge", "Photon Bay", "Stellar Springs",
     "Orion's Harbor", "Cosmic Heights", "Asteroid Shores", "Galactic Nexus", "Pulsar Haven"
 ]
-
-
-
-
 def generate_story(prompt, system_message, protagonist):
     unique_context = f"This is a story about {protagonist}."
     full_prompt = f"{prompt} {unique_context}"
@@ -93,7 +89,7 @@ def generate_story(prompt, system_message, protagonist):
     response = client.chat.completions.create(
         model="gpt-4o",
         messages=[
-            {"role": "system", "content": system_message},
+            {"role": "system", "content": f"{system_message} Make sure this is suitable for children."},
             {"role": "user", "content": full_prompt}
         ],
         max_tokens=2500,
@@ -157,7 +153,6 @@ def chunk_text_to_ssml(text, max_size=5000):
     if current_chunk:
         yield f"<speak>{''.join(current_chunk)}</speak>"
 
-
 def synthesize_speech(ssml_text, language_code, name, gender):
     chunks = chunk_text_to_ssml(ssml_text, max_size=5000)
     audio_contents = []
@@ -180,7 +175,6 @@ def synthesize_speech(ssml_text, language_code, name, gender):
     
     return b"".join(audio_contents)  # Concatenate all audio parts into a single byte stream
 
-
 def upload_to_gcs(content, file_path):
     blob = bucket.blob(file_path)
     blob.upload_from_string(content, content_type='audio/mpeg' if file_path.endswith('.mp3') else 'image/png')
@@ -202,9 +196,105 @@ def generate_image(prompt, char_profile):
     )
     return response.data[0].url
 
+def generate_and_store_story_content(prompt, title, tags, genre):
+    # Select protagonist and location based on genre
+    if genre == "fantasy":
+        protagonist = random.choice(fantasy_protagonists)
+        location = random.choice(fantasy_land_names)
+    elif genre == "sci-fi":
+        protagonist = random.choice(sci_fi_protagonists)
+        location = random.choice(sci_fi_location_names)
+    else:
+        return {"error": "Unsupported genre"}
+
+    # Update prompt with selected location
+    prompt = prompt.format(location)
+    char_profile = f"Main character: {protagonist}"
+
+    # Generate a unique ID for the story
+    story_id = str(uuid.uuid4())
+
+    # Generate English story content
+    content_en = generate_story(prompt, "You are a storyteller.", protagonist)
+    
+    # Translate English story content to Turkish
+    content_tr = translate_story(content_en)
+
+    # Summarize the story
+    summary = summarize_story(content_en)
+
+    # Extract key points
+    key_points = extract_key_points(summary)
+
+    # Generate images for each key point
+    image_urls = []
+    for point in key_points:
+        image_url = generate_image(point, char_profile)
+        image_urls.append(image_url)
+
+    # Store images in Cloud Storage
+    image_paths = []
+    for i, url in enumerate(image_urls):
+        response = requests.get(url)
+        file_path = f'stories/{genre}/{story_id}/images/image_{i+1}.png'
+        blob = bucket.blob(file_path)
+        blob.upload_from_string(response.content, content_type='image/png')
+        image_paths.append(blob.public_url)
+
+    # Add anchors to the story text
+    content_en_with_anchors = insert_image_tags(content_en, image_paths)
+    content_tr_with_anchors = insert_image_tags(content_tr, image_paths)
+
+    # Define TTS voices and generate TTS for English and Turkish stories
+    voices = [
+        {"name": "en-US-Wavenet-D", "gender": texttospeech.SsmlVoiceGender.MALE, "age": "young_man"},
+        {"name": "en-GB-Wavenet-A", "gender": texttospeech.SsmlVoiceGender.FEMALE, "age": "young_woman"},
+        {"name": "en-GB-Wavenet-D", "gender": texttospeech.SsmlVoiceGender.MALE, "age": "old_man"},
+        {"name": "en-US-Wavenet-C", "gender": texttospeech.SsmlVoiceGender.FEMALE, "age": "old_woman"},
+        {"name": "tr-TR-Wavenet-B", "gender": texttospeech.SsmlVoiceGender.MALE, "age": "young_man"},  # Corrected
+        {"name": "tr-TR-Wavenet-C", "gender": texttospeech.SsmlVoiceGender.FEMALE, "age": "young_woman"},  # Corrected
+        {"name": "tr-TR-Wavenet-E", "gender": texttospeech.SsmlVoiceGender.MALE, "age": "old_man"},
+        {"name": "tr-TR-Wavenet-D", "gender": texttospeech.SsmlVoiceGender.FEMALE, "age": "old_woman"}  # Corrected
+        
+    ]
+
+    tts_urls = {}
+    for voice in voices:
+        language_code = voice['name'][:5]
+        content = content_en_with_anchors if "en-" in voice['name'] else content_tr_with_anchors
+        tts_audio = synthesize_speech(content, language_code, voice['name'], voice['gender'])
+        directory = "en" if "en-" in voice['name'] else "tr"
+        file_path = f'stories/{genre}/{story_id}/{directory}/{voice["age"]}.mp3'
+        tts_urls[f'{voice["age"]}_{directory}'] = upload_to_gcs(tts_audio, file_path)
+
+    # Store story content and TTS URLs in Cloud Storage
+    story_data = {
+        'title': title,
+        'content_en': content_en_with_anchors,
+        'content_tr': content_tr_with_anchors,
+        'tags': tags,
+        'genre': genre,
+        'tts_urls': tts_urls,
+        'image_urls': image_paths
+    }
+    story_blob = bucket.blob(f'stories/{genre}/{story_id}/story_data.json')
+    story_blob.upload_from_string(json.dumps(story_data), content_type='application/json')
+
+    return {
+        "story_id": story_id,
+        "title": title,
+        "content_en": content_en_with_anchors,
+        "content_tr": content_tr_with_anchors,
+        "tags": tags,
+        "genre": genre,
+        "tts_urls": tts_urls,
+        "image_urls": image_paths
+    }
+
 @app.route('/')
 def home():
     return "Welcome to the Storyteller Backend"
+
 
 @app.route('/generate-story', methods=['POST'])
 def generate_and_store_story():
@@ -217,8 +307,19 @@ def generate_and_store_story():
     if not prompt or not title or not genre:
         return jsonify({"error": "Prompt, title, and genre are required"}), 400
 
-    # Pick a random protagonist from the list
-    protagonist = random.choice(protagonists)
+    # Select protagonist and location based on genre
+    if genre == "fantasy":
+        protagonist = random.choice(fantasy_protagonists)
+        location = random.choice(fantasy_land_names)
+    elif genre == "sci-fi":
+        protagonist = random.choice(sci_fi_protagonists)
+        location = random.choice(sci_fi_location_names)
+    else:
+        return jsonify({"error": "Unsupported genre"}), 400
+
+    # Update prompt with selected location
+    prompt = prompt.format(location)
+
     char_profile = f"Main character: {protagonist}"
 
     # Generate a unique ID for the story
@@ -310,3 +411,4 @@ def insert_image_tags(content, image_paths):
 
 if __name__ == '__main__':
     app.run(debug=True)
+
