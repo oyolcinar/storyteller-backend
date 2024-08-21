@@ -2,3 +2,6 @@ venv\Scripts\activate
 python app.py
 python batch_processor.py
 python test_generate_stories.py
+
+gcloud builds submit --tag gcr.io/potent-orbit-429912-d5/story-api
+gcloud run deploy story-api --image gcr.io/potent-orbit-429912-d5/story-api --platform managed --allow-unauthenticated

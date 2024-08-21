@@ -3,6 +3,7 @@ from flask import Flask, request, jsonify
 from google.cloud import storage
 import os
 import json
+import datetime
 
 app = Flask(__name__)
 
@@ -10,6 +11,16 @@ app = Flask(__name__)
 storage_client = storage.Client()
 bucket_name = 'storytellerbucket'
 bucket = storage_client.bucket(bucket_name)
+
+def generate_signed_url(blob_name, expiration_time=3600):
+    """Generate a signed URL for a given blob."""
+    blob = bucket.blob(blob_name)
+    url = blob.generate_signed_url(
+        version="v4",
+        expiration=datetime.timedelta(seconds=expiration_time),
+        method='GET'
+    )
+    return url
 
 def get_random_story(genre=None):
     blobs = bucket.list_blobs(prefix='stories/')
@@ -19,14 +30,18 @@ def get_random_story(genre=None):
         if blob.name.endswith('story_data.json'):
             story_data = json.loads(blob.download_as_string())
             if genre is None or story_data['genre'] == genre:
+                # Generate signed URLs for images and TTS files
+                signed_image_urls = [generate_signed_url(image_url) for image_url in story_data['image_urls']]
+                signed_tts_urls = {key: generate_signed_url(tts_url) for key, tts_url in story_data['tts_urls'].items()}
+
                 stories.append({
                     'id': blob.name.split('/')[-3],
                     'title': story_data['title'],
                     'genre': story_data['genre'],
                     'tags': story_data['tags'],
                     'summary': story_data.get('summary', ''),
-                    'image_urls': story_data['image_urls'],
-                    'tts_urls': story_data['tts_urls'],
+                    'image_urls': signed_image_urls,
+                    'tts_urls': signed_tts_urls,
                     'content_en': story_data.get('content_en', ''),  # English story content
                     'content_tr': story_data.get('content_tr', '')   # Turkish story content
                 })
