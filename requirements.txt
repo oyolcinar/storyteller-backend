@@ -1,2 +1,5 @@
 flask
 google-cloud-storage
+google-cloud-secret-manager
+google-auth
+google-auth-oauthlib
